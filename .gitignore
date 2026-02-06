@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+
+# Logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Editor directories
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local configuration (user should create their own)
+epistemic-config.json
+.memory-status-cache
+
+# Backup files
+*.bak
+*.backup

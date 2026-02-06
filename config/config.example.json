@@ -1,0 +1,22 @@
+{
+  "version": "1.0.0",
+  "description": "Epistemic Guardrails configuration - defines sensitive project detection",
+  "documentation": "https://github.com/theios-research-institute/epistemic-guardrails-for-ai-agents",
+
+  "sensitive_projects": {
+    "description": "Projects that REQUIRE Memory/Retention to be OFF",
+    "paths": [
+      "~/proprietary-research",
+      "~/patents/pending",
+      "~/confidential"
+    ],
+    "keywords": [
+      "proprietary",
+      "confidential",
+      "restricted",
+      "patent",
+      "trade-secret",
+      "pre-publication"
+    ]
+  }
+}
