@@ -32,6 +32,20 @@ cursor_pre_tool_use() {
     local TOOL_INPUT=$(echo "$INPUT" | jq -r '.tool_input // {}')
     local CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 
+    # Check outbound actions for bash/Bash tool
+    if [ "$TOOL_NAME" = "bash" ] || [ "$TOOL_NAME" = "Bash" ]; then
+        local COMMAND=$(echo "$TOOL_INPUT" | jq -r '.command // empty')
+        if [ -n "$COMMAND" ] && [ "$COMMAND" != "null" ]; then
+            local BLOCK_REASON
+            BLOCK_REASON=$(epistemic_check_outbound "$COMMAND" "$CWD")
+            if [ $? -eq 0 ] && [ -n "$BLOCK_REASON" ]; then
+                echo "{\"decision\": \"deny\", \"reason\": \"$BLOCK_REASON\"}"
+                exit 2
+            fi
+        fi
+        exit 0
+    fi
+
     # Extract file path based on tool type
     local FILE_PATH=""
     case "$TOOL_NAME" in

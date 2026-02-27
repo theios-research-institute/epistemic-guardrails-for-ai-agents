@@ -25,11 +25,12 @@ AI coding assistants like Claude Code, Cursor, and GitHub Copilot can retain con
 
 The answer: **Epistemic Guardrails** - a framework that enforces information boundaries based on project sensitivity.
 
-### Three Layers of Protection
+### Four Layers of Protection
 
 1. **Session-Start Guard** - Warns the AI about sensitive directories when memory is enabled (SessionStart hook)
 2. **PreToolUse Hook** - Blocks file access to sensitive directories during active sessions (hard enforcement)
 3. **Path + Keyword Detection** - Identifies sensitive projects by directory path and naming patterns
+4. **Outbound Action Guard** - Blocks pushes, publishes, and deploys to unauthorized destinations (Bash tool interception)
 
 ---
 
@@ -60,6 +61,10 @@ Epistemic Guardrails provides a unified framework for controlling information ac
 |  |   Adapter   |   |   Adapter   |   |   Adapter   |        |
 |  +------+------+   +------+------+   +------+------+        |
 |         |                 |                 |               |
+|    File Access +    Bash Outbound     File Access +         |
+|    Bash Outbound    Interception      Bash Outbound         |
+|    Interception                       Interception          |
+|         |                 |                 |               |
 |         +-----------------+-----------------+               |
 |                           |                                 |
 |                +----------v----------+                      |
@@ -67,12 +72,12 @@ Epistemic Guardrails provides a unified framework for controlling information ac
 |                |  (epistemic-core)   |                      |
 |                +----------+----------+                      |
 |                           |                                 |
-|         +-----------------+-----------------+               |
-|         |                 |                 |               |
-|  +------v------+   +------v------+   +------v------+        |
-|  | .epistemic- |   |   Config    |   |   Memory    |        |
-|  |  tier files |   |    Paths    |   |   Status    |        |
-|  +-------------+   +-------------+   +-------------+        |
+|         +--------+--------+--------+--------+               |
+|         |        |        |        |        |               |
+|  +------v-+  +---v----+  +v-----+  +v------+               |
+|  |epistemic|  |Config |  |Memory|  |ALLOWED |               |
+|  |tier file|  | Paths |  |Status|  |REMOTES |               |
+|  +---------+  +-------+  +------+  +--------+              |
 |                                                             |
 +-------------------------------------------------------------+
 ```
@@ -214,7 +219,43 @@ Create `.epistemic-tier` in any project root:
 ```bash
 TIER=restricted
 MEMORY_REQUIRED=off
+ALLOWED_REMOTES=github.com/my-org/my-repo
 ```
+
+### Outbound Action Protection
+
+The `ALLOWED_REMOTES` field declares where code can be pushed, published, or deployed. When set, any outbound command targeting an unlisted destination is blocked.
+
+```bash
+# Exact repository (works with any git host)
+ALLOWED_REMOTES=github.com/my-org/my-repo
+ALLOWED_REMOTES=gitlab.com/my-group/my-repo
+ALLOWED_REMOTES=bitbucket.org/my-team/my-repo
+
+# Multiple destinations (comma-separated)
+ALLOWED_REMOTES=github.com/my-org/my-repo,gitlab.com/my-group/my-repo
+
+# Wildcard — any repo under an org/group
+ALLOWED_REMOTES=github.com/my-org/*
+ALLOWED_REMOTES=gitlab.com/my-group/*
+
+# Self-hosted servers
+ALLOWED_REMOTES=git.internal.company.com/*
+ALLOWED_REMOTES=192.168.1.50:*
+
+# Package registries
+ALLOWED_REMOTES=registry.npmjs.org
+ALLOWED_REMOTES=https://private-npm.company.com
+
+# S3 buckets
+ALLOWED_REMOTES=s3://my-deploy-bucket
+```
+
+**Intercepted commands:** `git push`, `git remote add/set-url`, `gh repo create`, `npm publish`, `cargo publish`, `pip/twine upload`, `rsync`, `scp`, `aws s3 cp/sync`
+
+**SSH URLs handled automatically:** Patterns like `github.com/my-org/my-repo` match HTTPS (`https://github.com/my-org/my-repo.git`), SSH (`git@github.com:my-org/my-repo.git`), `ssh://`, and `git://` protocol URLs. All URL formats are normalized before matching.
+
+**Backwards compatible:** If `ALLOWED_REMOTES` is absent or empty, all outbound actions are allowed.
 
 ---
 
@@ -256,7 +297,7 @@ Add to `~/.claude/settings.json`:
       }]
     }],
     "PreToolUse": [{
-      "matcher": "Read|Write|Edit|Glob|Grep",
+      "matcher": "Read|Write|Edit|Glob|Grep|Bash",
       "hooks": [{
         "type": "command",
         "command": "~/.claude/hooks/epistemic-file-guard.sh"
@@ -401,6 +442,20 @@ The local status tracker and your AI assistant's settings must match:
 2. Check for `.epistemic-tier` file in project or parent directories
 3. Review `~/.epistemic/config.json` for path/keyword matches
 
+### Outbound action blocked unexpectedly
+
+1. Check `ALLOWED_REMOTES` in your `.epistemic-tier`: `grep ALLOWED_REMOTES .epistemic-tier`
+2. Verify the git remote URL matches: `git remote -v`
+3. Pattern must be a substring of the normalized URL (e.g., `github.com/my-org/my-repo` matches both `https://github.com/my-org/my-repo.git` and `git@github.com:my-org/my-repo.git`)
+4. Use `*` wildcard for org-level access: `github.com/my-org/*`
+5. All URL formats are automatically normalized: `git@host:path`, `ssh://`, `git://`, and `https://` all become `host/path` before matching
+
+### Push goes to wrong remote despite ALLOWED_REMOTES
+
+`ALLOWED_REMOTES` checks the remote URL, not the auth account. Also verify:
+1. Correct auth account is active: `gh auth status`
+2. The remote URL itself is correct: `git remote get-url origin`
+
 ### Permission denied errors
 
 ```bash
@@ -491,4 +546,4 @@ Theios (θεῖος) Research Institute, Inc. is a 501(c)(3) nonprofit organizat
 
 ---
 
-*Epistemic Guardrails for AI Agents v1.0.0 — Theios Research Institute, Inc.*
+*Epistemic Guardrails for AI Agents v1.1.0 — Theios Research Institute, Inc.*

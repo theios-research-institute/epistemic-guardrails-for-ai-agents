@@ -203,3 +203,237 @@ epistemic_get_session_warning() {
     local CWD="$1"
     echo "EPISTEMIC WARNING: You are in a RESTRICTED project directory ($CWD) but Memory/Retention is ENABLED. This violates epistemic access controls. Disable memory before working here."
 }
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Function: Read ALLOWED_REMOTES from nearest .epistemic-tier
+# Args: $1 = directory path (defaults to pwd)
+# Output: prints the ALLOWED_REMOTES value (may be empty)
+# Returns: 0 if ALLOWED_REMOTES found and non-empty, 1 otherwise
+# ═══════════════════════════════════════════════════════════════════════════
+epistemic_get_allowed_remotes() {
+    local CHECK_DIR="${1:-$(pwd)}"
+
+    # Get directory if file path provided
+    if [ -f "$CHECK_DIR" ]; then
+        CHECK_DIR=$(dirname "$CHECK_DIR")
+    fi
+
+    # Walk up directory tree
+    local TIER_DIR="$CHECK_DIR"
+    while [ "$TIER_DIR" != "/" ] && [ -n "$TIER_DIR" ]; do
+        if [ -f "$TIER_DIR/.epistemic-tier" ]; then
+            local ALLOWED=$(grep -E "^ALLOWED_REMOTES=" "$TIER_DIR/.epistemic-tier" 2>/dev/null | cut -d= -f2)
+            if [ -n "$ALLOWED" ]; then
+                echo "$ALLOWED"
+                return 0
+            fi
+            return 1
+        fi
+        TIER_DIR=$(dirname "$TIER_DIR")
+    done
+
+    return 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Function: Resolve a git remote name to its URL
+# Args: $1 = remote name (e.g. "origin")
+# Output: prints the remote URL
+# Returns: 0 on success, 1 on failure
+# ═══════════════════════════════════════════════════════════════════════════
+epistemic_resolve_git_remote() {
+    local REMOTE_NAME="$1"
+    local URL
+    URL=$(git remote get-url "$REMOTE_NAME" 2>/dev/null)
+    if [ -n "$URL" ]; then
+        echo "$URL"
+        return 0
+    fi
+    return 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Function: Normalize a git URL for comparison
+# Converts SSH-style URLs to a canonical form matching HTTPS patterns
+#   git@github.com:org/repo.git  → github.com/org/repo
+#   https://github.com/org/repo.git → github.com/org/repo
+#   ssh://git@github.com/org/repo.git → github.com/org/repo
+#   git://github.com/org/repo.git → github.com/org/repo
+# Args: $1 = URL to normalize
+# Output: normalized URL string
+# ═══════════════════════════════════════════════════════════════════════════
+epistemic_normalize_git_url() {
+    local URL="$1"
+
+    # Strip trailing .git
+    URL="${URL%.git}"
+
+    # ssh://git@host/path → host/path
+    if [[ "$URL" == ssh://* ]]; then
+        URL=$(echo "$URL" | sed -E 's|^ssh://[^@]*@||; s|^ssh://||')
+    fi
+
+    # git://host/path → host/path (read-only git protocol)
+    URL=$(echo "$URL" | sed -E 's|^git://||')
+
+    # https://host/path or http://host/path → host/path
+    URL=$(echo "$URL" | sed -E 's|^https?://||')
+
+    # git@host:path → host/path (SSH shorthand)
+    URL=$(echo "$URL" | sed -E 's|^[^@]*@([^:]+):|\1/|')
+
+    echo "$URL"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Function: Check if a URL matches an allowed remote pattern
+# Args: $1 = URL to check, $2 = pattern to match against
+# Pattern syntax:
+#   - Exact substring: "github.com/my-org/my-repo"
+#   - Trailing wildcard: "github.com/my-org/*"
+# URLs are normalized before matching (SSH and HTTPS both work)
+# Returns: 0 if matches, 1 if not
+# ═══════════════════════════════════════════════════════════════════════════
+epistemic_match_remote() {
+    local URL="$1"
+    local PATTERN="$2"
+
+    # Trim whitespace
+    PATTERN=$(echo "$PATTERN" | xargs)
+    [ -z "$PATTERN" ] && return 1
+
+    # Normalize the URL for consistent matching
+    local NORMALIZED
+    NORMALIZED=$(epistemic_normalize_git_url "$URL")
+
+    if [[ "$PATTERN" == *'*' ]]; then
+        # Wildcard: match prefix (everything before the *)
+        local PREFIX="${PATTERN%\*}"
+        if [[ "$NORMALIZED" == *"$PREFIX"* ]] || [[ "$URL" == *"$PREFIX"* ]]; then
+            return 0
+        fi
+    else
+        # Exact substring match (check both normalized and raw)
+        if [[ "$NORMALIZED" == *"$PATTERN"* ]] || [[ "$URL" == *"$PATTERN"* ]]; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Function: Extract destination from an outbound command and check it
+# Args: $1 = command string, $2 = working directory (optional)
+# Returns: 0 if should BLOCK, 1 if should ALLOW
+# Output: if blocked, prints a deny reason message
+# ═══════════════════════════════════════════════════════════════════════════
+epistemic_check_outbound() {
+    local COMMAND="$1"
+    local CWD="${2:-$(pwd)}"
+
+    # Get ALLOWED_REMOTES (use || to prevent set -e abort)
+    local ALLOWED=""
+    ALLOWED=$(epistemic_get_allowed_remotes "$CWD") || ALLOWED=""
+    if [ -z "$ALLOWED" ]; then
+        return 1  # No restrictions declared — allow
+    fi
+
+    # Determine destination based on command pattern
+    local DESTINATION=""
+
+    # git push [remote] [branch...]
+    if echo "$COMMAND" | grep -qE '^\s*git\s+push(\s|$)'; then
+        # Extract remote name (first non-flag arg after "git push")
+        local REMOTE_NAME
+        REMOTE_NAME=$(echo "$COMMAND" | sed -E 's/^[[:space:]]*git[[:space:]]+push[[:space:]]+//' | awk '{for(i=1;i<=NF;i++){if($i !~ /^-/){print $i; exit}}}')
+        if [ -z "$REMOTE_NAME" ]; then
+            REMOTE_NAME="origin"
+        fi
+        DESTINATION=$(cd "$CWD" 2>/dev/null && epistemic_resolve_git_remote "$REMOTE_NAME") || DESTINATION=""
+
+    # git remote add <name> <url>
+    elif echo "$COMMAND" | grep -qE '^\s*git\s+remote\s+add\s'; then
+        DESTINATION=$(echo "$COMMAND" | sed -E 's/^[[:space:]]*git[[:space:]]+remote[[:space:]]+add[[:space:]]+[^[:space:]]+[[:space:]]+//' | awk '{print $1}')
+
+    # git remote set-url [--push|--delete] <name> <url>
+    elif echo "$COMMAND" | grep -qE '^\s*git\s+remote\s+set-url\s'; then
+        # Strip "git remote set-url", then skip optional flags (--push, --delete)
+        # before extracting remote name and URL
+        local SETURL_ARGS
+        SETURL_ARGS=$(echo "$COMMAND" | sed -E 's/^[[:space:]]*git[[:space:]]+remote[[:space:]]+set-url[[:space:]]+//')
+        # Skip any leading --flag arguments
+        while echo "$SETURL_ARGS" | grep -qE '^--[^[:space:]]+'; do
+            SETURL_ARGS=$(echo "$SETURL_ARGS" | sed -E 's/^--[^[:space:]]+[[:space:]]*//')
+        done
+        # Now first word is remote name, second is URL
+        DESTINATION=$(echo "$SETURL_ARGS" | awk '{print $2}')
+
+    # gh repo create [owner/repo]
+    # Note: gh CLI is GitHub-specific, so github.com/ prefix is correct here
+    elif echo "$COMMAND" | grep -qE '^\s*gh\s+repo\s+create\s'; then
+        local REPO_ARG
+        REPO_ARG=$(echo "$COMMAND" | sed -E 's/^[[:space:]]*gh[[:space:]]+repo[[:space:]]+create[[:space:]]+//' | awk '{for(i=1;i<=NF;i++){if($i !~ /^-/){print $i; exit}}}')
+        if [ -n "$REPO_ARG" ]; then
+            DESTINATION="github.com/$REPO_ARG"
+        fi
+
+    # npm publish [--registry <url>]
+    elif echo "$COMMAND" | grep -qE '^\s*npm\s+publish'; then
+        local REGISTRY
+        REGISTRY=$(echo "$COMMAND" | grep -oE -- '--registry[[:space:]]+[^[:space:]]+' | awk '{print $2}')
+        DESTINATION="${REGISTRY:-registry.npmjs.org}"
+
+    # cargo publish [--registry <name|url>]
+    elif echo "$COMMAND" | grep -qE '^\s*cargo\s+publish'; then
+        local CARGO_REGISTRY
+        CARGO_REGISTRY=$(echo "$COMMAND" | grep -oE -- '--registry[[:space:]]+[^[:space:]]+' | awk '{print $2}')
+        DESTINATION="${CARGO_REGISTRY:-crates.io}"
+
+    # pip upload / twine upload [--repository <name>] [--repository-url <url>]
+    elif echo "$COMMAND" | grep -qE '^\s*(pip|twine)\s+upload'; then
+        local REPO_URL REPO_NAME
+        REPO_URL=$(echo "$COMMAND" | grep -oE -- '--repository-url[[:space:]]+[^[:space:]]+' | awk '{print $2}')
+        REPO_NAME=$(echo "$COMMAND" | grep -oE -- '--repository[[:space:]]+[^[:space:]]+' | grep -v -- '--repository-url' | awk '{print $2}')
+        if [ -n "$REPO_URL" ]; then
+            DESTINATION="$REPO_URL"
+        elif [ -n "$REPO_NAME" ]; then
+            DESTINATION="$REPO_NAME"
+        else
+            DESTINATION="pypi.org"
+        fi
+
+    # rsync to remote — find the last non-flag argument containing ':'
+    # (remote destinations use host:path syntax)
+    elif echo "$COMMAND" | grep -qE '^\s*rsync\s'; then
+        DESTINATION=$(echo "$COMMAND" | awk '{for(i=NF;i>=1;i--){if($i !~ /^-/ && $i ~ /:/){print $i; exit}}}')
+
+    # scp to remote — find the last non-flag argument containing ':'
+    elif echo "$COMMAND" | grep -qE '^\s*scp\s'; then
+        DESTINATION=$(echo "$COMMAND" | awk '{for(i=NF;i>=1;i--){if($i !~ /^-/ && $i ~ /:/){print $i; exit}}}')
+
+    # aws s3 cp/sync to remote
+    elif echo "$COMMAND" | grep -qE '^\s*aws\s+s3\s+(cp|sync)\s'; then
+        DESTINATION=$(echo "$COMMAND" | grep -oE 's3://[^ ]+' | tail -1)
+
+    else
+        return 1  # Not an outbound command — allow
+    fi
+
+    # If no destination could be extracted, allow
+    if [ -z "$DESTINATION" ]; then
+        return 1
+    fi
+
+    # Check destination against each allowed pattern
+    IFS=',' read -ra PATTERNS <<< "$ALLOWED"
+    for PATTERN in "${PATTERNS[@]}"; do
+        if epistemic_match_remote "$DESTINATION" "$PATTERN"; then
+            return 1  # Matched — allow
+        fi
+    done
+
+    # No match — block
+    echo "OUTBOUND ACTION BLOCKED: Destination '$DESTINATION' is not in ALLOWED_REMOTES. Allowed: $ALLOWED"
+    return 0
+}

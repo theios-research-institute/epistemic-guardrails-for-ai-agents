@@ -154,6 +154,177 @@ fi
 echo ""
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Outbound Action Tests
+# ═══════════════════════════════════════════════════════════════════════════
+echo -e "${BOLD}Outbound Action Tests${NC}"
+
+# Create a temp directory with .epistemic-tier containing ALLOWED_REMOTES
+OUTBOUND_TEMP=$(mktemp -d)
+cat > "$OUTBOUND_TEMP/.epistemic-tier" << 'TIEREOF'
+TIER=restricted
+MEMORY_REQUIRED=off
+ALLOWED_REMOTES=github.com/my-org/my-repo,gitlab.com/my-group/*
+TIEREOF
+
+# Initialize a git repo with a test remote
+(cd "$OUTBOUND_TEMP" && git init -q && git remote add origin "https://github.com/my-org/my-repo.git")
+
+# Test: epistemic_match_remote exact match
+if epistemic_match_remote "https://github.com/my-org/my-repo.git" "github.com/my-org/my-repo"; then
+    echo -e "${GREEN}✓${NC} epistemic_match_remote handles exact match"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} epistemic_match_remote should match exact pattern"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test: epistemic_match_remote wildcard match
+if epistemic_match_remote "https://gitlab.com/my-group/some-repo.git" "gitlab.com/my-group/*"; then
+    echo -e "${GREEN}✓${NC} epistemic_match_remote handles wildcard match"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} epistemic_match_remote should match wildcard pattern"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test: epistemic_match_remote rejects non-match
+if epistemic_match_remote "https://github.com/wrong-org/wrong-repo.git" "github.com/my-org/my-repo"; then
+    echo -e "${RED}✗${NC} epistemic_match_remote should reject non-matching URL"
+    FAILED=$((FAILED + 1))
+else
+    echo -e "${GREEN}✓${NC} epistemic_match_remote rejects non-matching URL"
+    PASSED=$((PASSED + 1))
+fi
+
+# Test: epistemic_match_remote matches SSH URL against HTTPS-style pattern
+if epistemic_match_remote "git@github.com:my-org/my-repo.git" "github.com/my-org/my-repo"; then
+    echo -e "${GREEN}✓${NC} epistemic_match_remote matches SSH URL (git@host:path)"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} epistemic_match_remote should match SSH URL against HTTPS-style pattern"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test: epistemic_match_remote matches ssh:// protocol URL
+if epistemic_match_remote "ssh://git@github.com/my-org/my-repo.git" "github.com/my-org/my-repo"; then
+    echo -e "${GREEN}✓${NC} epistemic_match_remote matches ssh:// protocol URL"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} epistemic_match_remote should match ssh:// protocol URL"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test: epistemic_match_remote matches git:// protocol URL
+if epistemic_match_remote "git://github.com/my-org/my-repo.git" "github.com/my-org/my-repo"; then
+    echo -e "${GREEN}✓${NC} epistemic_match_remote matches git:// protocol URL"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} epistemic_match_remote should match git:// protocol URL"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test: epistemic_match_remote matches Bitbucket URL
+if epistemic_match_remote "https://bitbucket.org/my-team/my-repo.git" "bitbucket.org/my-team/my-repo"; then
+    echo -e "${GREEN}✓${NC} epistemic_match_remote matches Bitbucket URL"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} epistemic_match_remote should match Bitbucket URL"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test: epistemic_match_remote matches self-hosted server with wildcard
+if epistemic_match_remote "git@git.internal.company.com:team/project.git" "git.internal.company.com/*"; then
+    echo -e "${GREEN}✓${NC} epistemic_match_remote matches self-hosted server with wildcard"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} epistemic_match_remote should match self-hosted server with wildcard"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test: epistemic_check_outbound allows push to listed remote
+OUTBOUND_EXIT=0
+OUTBOUND_RESULT=$(epistemic_check_outbound "git push origin main" "$OUTBOUND_TEMP") || OUTBOUND_EXIT=$?
+if [ $OUTBOUND_EXIT -ne 0 ]; then
+    echo -e "${GREEN}✓${NC} epistemic_check_outbound allows push to listed remote"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} epistemic_check_outbound should allow push to listed remote"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test: epistemic_check_outbound blocks push to unlisted remote (add a bad remote first)
+(cd "$OUTBOUND_TEMP" && git remote add bad "https://github.com/wrong-org/wrong-repo.git")
+OUTBOUND_EXIT=0
+OUTBOUND_RESULT=$(epistemic_check_outbound "git push bad main" "$OUTBOUND_TEMP") || OUTBOUND_EXIT=$?
+if [ $OUTBOUND_EXIT -eq 0 ] && [ -n "$OUTBOUND_RESULT" ]; then
+    echo -e "${GREEN}✓${NC} epistemic_check_outbound blocks push to unlisted remote"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} epistemic_check_outbound should block push to unlisted remote"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test: epistemic_check_outbound handles git remote set-url --push correctly
+OUTBOUND_EXIT=0
+OUTBOUND_RESULT=$(epistemic_check_outbound "git remote set-url --push origin https://github.com/my-org/my-repo.git" "$OUTBOUND_TEMP") || OUTBOUND_EXIT=$?
+if [ $OUTBOUND_EXIT -ne 0 ]; then
+    echo -e "${GREEN}✓${NC} epistemic_check_outbound allows set-url --push to listed remote"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} epistemic_check_outbound should allow set-url --push to listed remote"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test: epistemic_check_outbound blocks git remote set-url --push to unlisted remote
+OUTBOUND_EXIT=0
+OUTBOUND_RESULT=$(epistemic_check_outbound "git remote set-url --push origin https://github.com/wrong-org/wrong-repo.git" "$OUTBOUND_TEMP") || OUTBOUND_EXIT=$?
+if [ $OUTBOUND_EXIT -eq 0 ] && [ -n "$OUTBOUND_RESULT" ]; then
+    echo -e "${GREEN}✓${NC} epistemic_check_outbound blocks set-url --push to unlisted remote"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} epistemic_check_outbound should block set-url --push to unlisted remote"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test: empty ALLOWED_REMOTES allows everything (backwards compatible)
+COMPAT_TEMP=$(mktemp -d)
+cat > "$COMPAT_TEMP/.epistemic-tier" << 'TIEREOF'
+TIER=restricted
+MEMORY_REQUIRED=off
+ALLOWED_REMOTES=
+TIEREOF
+OUTBOUND_EXIT=0
+OUTBOUND_RESULT=$(epistemic_check_outbound "git push origin main" "$COMPAT_TEMP") || OUTBOUND_EXIT=$?
+if [ $OUTBOUND_EXIT -ne 0 ]; then
+    echo -e "${GREEN}✓${NC} Empty ALLOWED_REMOTES allows everything (backwards compatible)"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} Empty ALLOWED_REMOTES should allow everything"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test: missing ALLOWED_REMOTES allows everything (backwards compatible)
+MISSING_TEMP=$(mktemp -d)
+cat > "$MISSING_TEMP/.epistemic-tier" << 'TIEREOF'
+TIER=restricted
+MEMORY_REQUIRED=off
+TIEREOF
+OUTBOUND_EXIT=0
+OUTBOUND_RESULT=$(epistemic_check_outbound "git push origin main" "$MISSING_TEMP") || OUTBOUND_EXIT=$?
+if [ $OUTBOUND_EXIT -ne 0 ]; then
+    echo -e "${GREEN}✓${NC} Missing ALLOWED_REMOTES allows everything (backwards compatible)"
+    PASSED=$((PASSED + 1))
+else
+    echo -e "${RED}✗${NC} Missing ALLOWED_REMOTES should allow everything"
+    FAILED=$((FAILED + 1))
+fi
+
+# Cleanup temp directories
+rm -rf "$OUTBOUND_TEMP" "$COMPAT_TEMP" "$MISSING_TEMP"
+
+echo ""
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Configuration Tests
 # ═══════════════════════════════════════════════════════════════════════════
 echo -e "${BOLD}Configuration Tests${NC}"

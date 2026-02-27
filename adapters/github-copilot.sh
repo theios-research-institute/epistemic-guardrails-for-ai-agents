@@ -44,10 +44,19 @@ copilot_pre_tool_use() {
             FILE_PATH=$(echo "$PARSED_ARGS" | jq -r '.file // .path // empty')
             ;;
         "bash")
-            # For bash commands, check if accessing sensitive paths
             local COMMAND=$(echo "$PARSED_ARGS" | jq -r '.command // empty')
-            # Extract potential file paths from command (basic detection)
-            # Check for cat, less, vim, nano, etc. accessing files
+
+            # Check outbound actions first
+            if [ -n "$COMMAND" ] && [ "$COMMAND" != "null" ]; then
+                local BLOCK_REASON
+                BLOCK_REASON=$(epistemic_check_outbound "$COMMAND" "$CWD")
+                if [ $? -eq 0 ] && [ -n "$BLOCK_REASON" ]; then
+                    echo "{\"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"$BLOCK_REASON\"}"
+                    exit 0
+                fi
+            fi
+
+            # Then check if accessing sensitive paths via file commands
             if echo "$COMMAND" | grep -qE '(cat|less|more|vim|nano|head|tail|grep|sed|awk)\s+[^|<>]+'; then
                 FILE_PATH=$(echo "$COMMAND" | grep -oE '(cat|less|more|vim|nano|head|tail|grep|sed|awk)\s+([^\s|<>]+)' | awk '{print $2}' | head -1)
             fi
