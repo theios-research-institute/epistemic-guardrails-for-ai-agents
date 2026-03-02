@@ -181,22 +181,20 @@ cp config/config.example.json ~/.epistemic/config.json
 
 #### GitHub Copilot CLI
 
+Copilot CLI uses **per-repository hooks** (not global config). The adapter is installed globally, but each repo needs a hooks file.
+
 ```bash
-# 1. Install core library (same as above)
+# 1. Install core library and adapter (same as above)
 mkdir -p ~/.epistemic/{core,adapters,scripts}
 cp core/epistemic-core.sh ~/.epistemic/core/
+cp adapters/github-copilot.sh ~/.epistemic/adapters/
 cp scripts/*.sh ~/.epistemic/scripts/
 chmod +x ~/.epistemic/**/*.sh
 
-# 2. Create hook directory and copy hooks
-mkdir -p ~/.config/gh-copilot/hooks
-cp adapters/github-copilot.sh ~/.config/gh-copilot/hooks/epistemic-guard.sh
-chmod +x ~/.config/gh-copilot/hooks/*.sh
-
-# 3. Copy configuration template
+# 2. Copy configuration template
 cp config/config.example.json ~/.epistemic/config.json
 
-# 4. Configure Copilot hooks (see Platform Configuration below)
+# 3. Enable hooks in each repo (see Platform Configuration below)
 ```
 
 ---
@@ -332,7 +330,14 @@ Add to Cursor settings (Settings > Agent > Hooks):
 
 ### GitHub Copilot CLI
 
-Add to `~/.config/gh-copilot/hooks.json`:
+Copilot CLI loads hooks from `.github/hooks/` in each repository (committed to the default branch). Use the included helper command to set up any repo:
+
+```bash
+# In any git repository
+epistemic-copilot-init
+```
+
+This creates `.github/hooks/copilot-hooks.json`:
 
 ```json
 {
@@ -340,11 +345,17 @@ Add to `~/.config/gh-copilot/hooks.json`:
   "hooks": {
     "preToolUse": [{
       "type": "command",
-      "bash": "~/.config/gh-copilot/hooks/epistemic-guard.sh"
+      "bash": "$HOME/.epistemic/adapters/github-copilot.sh pre-tool-use"
+    }],
+    "sessionStart": [{
+      "type": "command",
+      "bash": "$HOME/.epistemic/adapters/github-copilot.sh session-start"
     }]
   }
 }
 ```
+
+Commit this file to your default branch for Copilot to pick it up. If you also use [Knowledge Tier Framework](https://github.com/theios-research-institute/knowledge-tier-framework-for-ai-agents), `init-project-tier` creates this file automatically.
 
 ---
 
@@ -361,7 +372,8 @@ Add to `~/.config/gh-copilot/hooks.json`:
 ├── scripts/
 │   ├── memory-status.sh
 │   ├── memory-on.sh
-│   └── memory-off.sh
+│   ├── memory-off.sh
+│   └── copilot-init.sh       # Per-repo Copilot hook setup
 ├── config.json                 # Sensitive project definitions
 └── .memory-status              # Current memory state
 ```
@@ -411,6 +423,16 @@ This framework abstracts these differences, providing:
 - **One configuration** for all platforms
 - **Consistent behavior** across tools
 - **Easy maintenance** - update core logic once
+
+### Platform Setup Comparison
+
+| Platform | Hook Scope | Setup Method |
+|----------|------------|--------------|
+| Claude Code | Global (one-time) | Add to `~/.claude/settings.json` |
+| Cursor | Global (one-time) | Settings > Agent > Hooks |
+| Copilot CLI | Per-repository | `epistemic-copilot-init` or `init-project-tier` |
+
+Claude Code and Cursor support global hooks that apply across all projects. Copilot CLI currently loads hooks from `.github/hooks/` within each repository. The `epistemic-copilot-init` command and the companion `init-project-tier` (Knowledge Tier Framework) automate this setup so you don't have to create the file manually.
 
 ---
 

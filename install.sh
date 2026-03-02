@@ -151,26 +151,78 @@ if command -v gh &> /dev/null && gh extension list 2>/dev/null | grep -q "copilo
     echo -e "${GREEN}✓ GitHub Copilot CLI detected${NC}"
     INSTALLED_ANY=true
 
-    COPILOT_CONFIG="$HOME/.config/gh-copilot"
-    mkdir -p "$COPILOT_CONFIG/hooks"
-
-    cat > "$COPILOT_CONFIG/hooks/epistemic-guard.sh" << 'HOOKEOF'
+    # Create epistemic-copilot-init script (per-repo hook setup)
+    cat > "$INSTALL_DIR/scripts/copilot-init.sh" << 'COPILOTEOF'
 #!/bin/bash
-exec "$HOME/.epistemic/adapters/github-copilot.sh" "pre-tool-use"
-HOOKEOF
-    chmod +x "$COPILOT_CONFIG/hooks/epistemic-guard.sh"
+# Epistemic Guardrails - GitHub Copilot CLI Hook Initializer
+# Copilot CLI uses per-repo hooks at .github/hooks/copilot-hooks.json
+# Run this in any git repo to enable epistemic guardrails for Copilot.
 
-    echo "  Created: ~/.config/gh-copilot/hooks/epistemic-guard.sh"
-    echo ""
-    echo -e "  ${YELLOW}Add to ~/.config/gh-copilot/hooks.json:${NC}"
-    cat << 'CONFIGEOF'
-  {
-    "version": 1,
-    "hooks": {
-      "preToolUse": [{"type": "command", "bash": "~/.config/gh-copilot/hooks/epistemic-guard.sh"}]
-    }
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+BOLD='\033[1m'
+
+TARGET_DIR="${1:-.}"
+cd "$TARGET_DIR" || exit 1
+
+# Verify this is a git repo
+if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+    echo -e "${RED}Error: Not a git repository. Run this inside a git repo.${NC}"
+    exit 1
+fi
+
+# Get repo root
+REPO_ROOT=$(git rev-parse --show-toplevel)
+HOOKS_DIR="$REPO_ROOT/.github/hooks"
+
+# Check if already configured
+if [ -f "$HOOKS_DIR/copilot-hooks.json" ]; then
+    echo -e "${YELLOW}Copilot hooks already configured at $HOOKS_DIR/copilot-hooks.json${NC}"
+    exit 0
+fi
+
+# Create hooks directory and file
+mkdir -p "$HOOKS_DIR"
+cat > "$HOOKS_DIR/copilot-hooks.json" << 'HOOKJSON'
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "$HOME/.epistemic/adapters/github-copilot.sh pre-tool-use"
+      }
+    ],
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "$HOME/.epistemic/adapters/github-copilot.sh session-start"
+      }
+    ]
   }
-CONFIGEOF
+}
+HOOKJSON
+
+echo -e "${GREEN}✓ Copilot hooks created: $HOOKS_DIR/copilot-hooks.json${NC}"
+echo ""
+echo -e "${BOLD}Next steps:${NC}"
+echo "  1. Commit the hooks file to your default branch"
+echo "  2. Copilot CLI will automatically use the hooks"
+echo ""
+COPILOTEOF
+    chmod +x "$INSTALL_DIR/scripts/copilot-init.sh"
+
+    echo "  Created: ~/.epistemic/scripts/copilot-init.sh"
+    echo ""
+    echo -e "  ${YELLOW}Copilot CLI uses per-repo hooks (not global config).${NC}"
+    echo -e "  ${YELLOW}Run in any git repo to enable guardrails:${NC}"
+    echo ""
+    echo "    epistemic-copilot-init"
+    echo ""
+    echo -e "  Or use ${BOLD}init-project-tier${NC} (Knowledge Tier Framework) which does this automatically."
     echo ""
 fi
 
@@ -201,6 +253,7 @@ if [ -n "$SHELL_RC" ]; then
 alias epistemic-memory-status="$HOME/.epistemic/scripts/memory-status.sh"
 alias epistemic-memory-on="$HOME/.epistemic/scripts/memory-on.sh"
 alias epistemic-memory-off="$HOME/.epistemic/scripts/memory-off.sh"
+alias epistemic-copilot-init="$HOME/.epistemic/scripts/copilot-init.sh"
 ALIASEOF
         echo "  Added aliases to $SHELL_RC"
     else
@@ -222,6 +275,7 @@ echo "Commands available (after restarting shell):"
 echo "  epistemic-memory-status  - Check current memory status"
 echo "  epistemic-memory-on      - Enable memory tracking"
 echo "  epistemic-memory-off     - Disable memory tracking"
+echo "  epistemic-copilot-init   - Enable Copilot hooks in current repo"
 echo ""
 echo "Configuration: $INSTALL_DIR/config.json"
 echo ""
