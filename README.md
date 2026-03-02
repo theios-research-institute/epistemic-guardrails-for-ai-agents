@@ -136,11 +136,22 @@ cp adapters/claude-code.sh ~/.epistemic/adapters/
 cp scripts/*.sh ~/.epistemic/scripts/
 chmod +x ~/.epistemic/**/*.sh
 
-# 2. Create hook directory and copy hooks
+# 2. Create hook wrapper scripts
 mkdir -p ~/.claude/hooks
-cp adapters/claude-code.sh ~/.claude/hooks/epistemic-file-guard.sh
-cp adapters/claude-code-session.sh ~/.claude/hooks/epistemic-session-guard.sh
-chmod +x ~/.claude/hooks/*.sh
+
+# PreToolUse guard (calls adapter in pre-tool-use mode)
+cat > ~/.claude/hooks/epistemic-file-guard.sh << 'EOF'
+#!/bin/bash
+exec "$HOME/.epistemic/adapters/claude-code.sh" "pre-tool-use"
+EOF
+
+# SessionStart guard (calls adapter in session-start mode)
+cat > ~/.claude/hooks/epistemic-session-guard.sh << 'EOF'
+#!/bin/bash
+exec "$HOME/.epistemic/adapters/claude-code.sh" "session-start"
+EOF
+
+chmod +x ~/.claude/hooks/epistemic-*.sh
 
 # 3. Copy configuration template
 cp config/config.example.json ~/.epistemic/config.json

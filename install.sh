@@ -119,7 +119,7 @@ HOOKEOF
     cat << 'CONFIGEOF'
   "hooks": {
     "SessionStart": [{"hooks": [{"type": "command", "command": "~/.claude/hooks/epistemic-session-guard.sh"}]}],
-    "PreToolUse": [{"matcher": "Read|Write|Edit|Glob|Grep", "hooks": [{"type": "command", "command": "~/.claude/hooks/epistemic-file-guard.sh"}]}]
+    "PreToolUse": [{"matcher": "Read|Write|Edit|Glob|Grep|Bash", "hooks": [{"type": "command", "command": "~/.claude/hooks/epistemic-file-guard.sh"}]}]
   }
 CONFIGEOF
     echo ""
